@@ -1,3 +1,4 @@
+#Importación de paquetes y lectura de csv:
 from sklearn.linear_model import Ridge
 from sklearn.metrics.pairwise import cosine_similarity,cosine_distances
 from sklearn.ensemble import RandomForestRegressor
@@ -5,9 +6,12 @@ import pandas as pd
 import numpy as np
 import random
 from sklearn import model_selection
+from scipy.spatial.distance import euclidean
+from scipy.stats import spearmanr
 
 data = pd.read_csv('hour.csv')
 data = data.drop("dteday", axis=1)
+data = data.drop("instant", axis=1)
 atributos = data.loc[:, 'season':'registered']
 objetivo = data['cnt']
 
@@ -15,10 +19,17 @@ objetivo = data['cnt']
  objetivo_entrenamiento, objetivo_prueba) = model_selection.train_test_split(
     atributos, objetivo, test_size=.33)
 
-Iterac=2
-atributosAcambiar=7
+atributos_entrenamiento = atributos_entrenamiento.values
 
-def metodo_lime(N,x,k):
+rangos = {}
+
+for columna in data.columns:
+    valor_min = data[columna].min()
+    valor_max = data[columna].max()
+    rangos[columna] = {'min': valor_min, 'max': valor_max}
+
+
+def metodo_lime(N,x,k,model):
     Xprima=[]
     R=[]
     W=[]
@@ -32,40 +43,14 @@ def metodo_lime(N,x,k):
         Xprima.append(xprima)
         R.append(r)
         W.append(w)
-        yprima = prediccion_de_modelo(xprima)        
+        yprima = prediccion_de_modelo(xprima,model)        
         Yprima.append(yprima)
-        
+    W=np.array(W)
+    W = W.reshape(W.shape[0])
     G = entrenar_modelo_ridge(R,Yprima,W)
-    return G.getParams()
+    return G.coef_
 
-def distancia_entre_muestras(x,xprima):
-    distancia = cosine_distances(x.values, xprima.values)
-    print(distancia)
-    return distancia
-
-#def representacion_muestra(atributosAPerturbar):
-    #return np.array([1 if i in atributosAPerturbar else 0 for i in range(len(x))])
-
-def entrenar_modelo_ridge(R, Yprima, W):
-    modelo_entrenado = Ridge(alpha=1.0) 
-    modelo_entrenado.fit(R, Yprima, sample_weight=W)
-    return modelo_entrenado
-
-
-def perturbar_muestra(x,atributosAPerturbar):
-    xprima = x.copy()
-    for i in range(0,len(atributosAPerturbar)):
-        if atributosAPerturbar[i] == 1:
-            xprima[i] = xprima[i] + random.randint(-1,1)
-    print(xprima.values)
-    return xprima
-
-def prediccion_de_modelo(xprima):
-    model = RandomForestRegressor()
-    model.fit(atributos_entrenamiento, objetivo_entrenamiento)
-    y_pred = model.predict(xprima)
-    return y_pred
-
+#Se seleccional los k atributos aleatorios a modificar
 def seleccionar_atributos_aleatorios(dataframe, k):
     seleccionados = random.sample(list(dataframe.columns), k)
     lista = [0 for i in range(len(dataframe.columns))]
@@ -75,10 +60,92 @@ def seleccionar_atributos_aleatorios(dataframe, k):
             lista[columna] = 1
         else:
             lista[columna] = 0
-    print(lista)
     return lista
 
+#def perturbar_muestra(x,atributosAPerturbar):
+#    xprima = x.copy()
+#    for i in range(0,len(atributosAPerturbar)):
+#        if atributosAPerturbar[i] == 1:
+#            xprima[i] = xprima[i] + random.randint(-1,1)
+#    return xprima
 
+#Se perturba la muestra original de forma que los atributos seleccionados pueden variar en un rango en función del valor máximo y mínimo de dicho atributo
+def perturbar_muestra(x, atributosAPerturbar):
+    xprima = x.copy()
+    for i in range(0,len(atributosAPerturbar)):
+        if atributosAPerturbar[i] == 1:
+            rango_min = xprima[i] - rangos[list(rangos.keys())[i]]['min']
+            rango_max = rangos[list(rangos.keys())[i]]['max'] - xprima[i]
+            xprima[i] = random.uniform(rango_min, rango_max)
+            #xprima[i] = xprima[i] + perturbacion
+    return xprima
+
+# Se calcula la distancia coseno entre la muestra original y la perturbada
+def distancia_entre_muestras(x,xprima):
+    return cosine_distances(x.values, xprima.values)
+
+#def representacion_muestra(atributosAPerturbar):
+#    return np.array([1 if i in atributosAPerturbar else 0 for i in range(len(x))])
+
+#Se predice el resultado de la muestra con el modelo elegido
+def prediccion_de_modelo(xprima,model):
+    y_pred = model.predict(xprima)
+    return y_pred
+
+#Se entrena el modelo de regresión Ridge con las muestras perturbadas y los pesos calculados
+def entrenar_modelo_ridge(R, Yprima, W):
+    modelo_entrenado = Ridge(alpha=1.0) 
+    modelo_entrenado.fit(R, Yprima, sample_weight=W)
+    return modelo_entrenado
+
+
+#Probar el método LIME
 nuevos_ejemplos = pd.DataFrame([[1,0,1,8,0,6,0,1,0.24,0.2879,0.75,0,1,7]])
 
-metodo_lime(Iterac,nuevos_ejemplos,atributosAcambiar)
+Iterac=100
+atributosAcambiar=5
+modelRandomForest = RandomForestRegressor(n_estimators=100)
+modelRandomForest.fit(atributos_entrenamiento, objetivo_entrenamiento)
+print("Método LIME con Random Forest: ",metodo_lime(Iterac,nuevos_ejemplos,atributosAcambiar,modelRandomForest))
+
+
+# Identidad
+
+def identidad(a, b):
+    epsilon_a = np.finfo(a.dtype).eps
+    epsilon_b = np.finfo(b.dtype).eps
+    return euclidean(a, b) == 0 and euclidean(epsilon_a, epsilon_b) == 0
+
+# Separabilidad
+
+def separabilidad(a, b):
+    epsilon_a = np.finfo(a.dtype).eps
+    epsilon_b = np.finfo(b.dtype).eps
+    return euclidean(a, b) != 0 and euclidean(epsilon_a, epsilon_b) > 0
+
+# Estabilidad
+
+def estabilidad(x):
+    d_x = np.array([euclidean(z - y) for y in x for z in x])
+    d_epsilon = np.array([euclidean(np.finfo(z.dtype).eps - np.finfo(y.dtype).eps for y in x) for z in x])
+    return spearmanr(d_x, d_epsilon) > 0
+
+# Selectividad
+
+def selectividad():
+    return null
+
+# Coherencia
+
+def coherencia():
+    return null
+
+# Completitud
+
+def completitud():
+    return null
+
+# Congruencia
+
+def congruencia():
+    return null
